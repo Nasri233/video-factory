@@ -5,7 +5,7 @@ import requests
 import tempfile
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
-import urllib.parse
+from gtts import gTTS
 
 app = Flask(__name__)
 
@@ -13,14 +13,9 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
-def generate_voice_gtts(script, output_path):
-    # Use Google Translate TTS (free, no API key needed)
-    text = urllib.parse.quote(script[:200])
-    url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={text}&tl=en&client=tw-ob"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    with open(output_path, 'wb') as f:
-        f.write(response.content)
+def generate_voice(script, output_path):
+    tts = gTTS(text=script, lang='en', tld='us', slow=False)
+    tts.save(output_path)
 
 def get_pexels_video(query="football soccer"):
     headers = {"Authorization": PEXELS_API_KEY}
@@ -41,7 +36,6 @@ def create_text_image(home, away, date, script, output_path, width=1080, height=
     img = Image.new('RGB', (width, height), color=(10, 10, 30))
     draw = ImageDraw.Draw(img)
     
-    # Gradient background effect
     for i in range(height):
         r = int(10 + (i/height) * 20)
         g = int(10 + (i/height) * 10)
@@ -56,22 +50,14 @@ def create_text_image(home, away, date, script, output_path, width=1080, height=
     except:
         font_title = font_match = font_body = font_small = ImageFont.load_default()
     
-    # Top banner
     draw.rectangle([(0, 0), (width, 130)], fill=(200, 160, 0))
-    draw.text((width//2, 65), "🏆 WORLD CUP 2026", fill=(0, 0, 0), font=font_title, anchor="mm")
-    
-    # Match
+    draw.text((width//2, 65), "WORLD CUP 2026", fill=(0, 0, 0), font=font_title, anchor="mm")
     draw.text((width//2, 250), home, fill=(255, 255, 255), font=font_match, anchor="mm")
     draw.text((width//2, 330), "VS", fill=(200, 160, 0), font=font_title, anchor="mm")
     draw.text((width//2, 420), away, fill=(255, 255, 255), font=font_match, anchor="mm")
-    
-    # Date
     draw.text((width//2, 510), date, fill=(180, 180, 180), font=font_small, anchor="mm")
-    
-    # Divider
     draw.rectangle([(80, 550), (width-80, 555)], fill=(200, 160, 0))
     
-    # Script text
     wrapped = textwrap.fill(script[:300], width=32)
     lines = wrapped.split('\n')
     y = 600
@@ -79,24 +65,19 @@ def create_text_image(home, away, date, script, output_path, width=1080, height=
         draw.text((width//2, y), line, fill=(255, 255, 255), font=font_body, anchor="mm")
         y += 55
     
-    # Bottom
     draw.rectangle([(0, height-120), (width, height)], fill=(200, 160, 0))
     draw.text((width//2, height-60), "#WorldCup2026 #FIFA #Football", fill=(0, 0, 0), font=font_small, anchor="mm")
-    
     img.save(output_path)
 
 def create_video(script, home, away, date, output_path):
     with tempfile.TemporaryDirectory() as tmpdir:
-        # 1. Generate voice
         audio_path = os.path.join(tmpdir, "voice.mp3")
-        generate_voice_gtts(script, audio_path)
+        generate_voice(script, audio_path)
         
-        # 2. Create background image
         bg_image_path = os.path.join(tmpdir, "background.png")
         create_text_image(home, away, date, script, bg_image_path)
         
-        # 3. Try to get Pexels video
-        video_url = get_pexels_video(f"football soccer world cup")
+        video_url = get_pexels_video("football soccer world cup")
         bg_video_path = os.path.join(tmpdir, "bg_video.mp4")
         has_video = False
         
@@ -110,7 +91,6 @@ def create_video(script, home, away, date, output_path):
             except:
                 has_video = False
         
-        # 4. Get audio duration
         try:
             result = subprocess.run([
                 "ffprobe", "-v", "error", "-show_entries",
@@ -121,7 +101,6 @@ def create_video(script, home, away, date, output_path):
         except:
             duration = 45
         
-        # 5. Create video with FFmpeg
         if has_video:
             cmd = [
                 "ffmpeg", "-y",
@@ -193,7 +172,7 @@ def create_video_endpoint():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "service": "video-factory"})
+    return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
