@@ -3,10 +3,9 @@ import subprocess
 import os
 import requests
 import tempfile
-import edge_tts
-import asyncio
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -14,47 +13,75 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
-async def generate_voice(script, output_path):
-    communicate = edge_tts.Communicate(script, voice="en-US-GuyNeural", rate="+10%")
-    await communicate.save(output_path)
+def generate_voice_gtts(script, output_path):
+    # Use Google Translate TTS (free, no API key needed)
+    text = urllib.parse.quote(script[:200])
+    url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={text}&tl=en&client=tw-ob"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    with open(output_path, 'wb') as f:
+        f.write(response.content)
 
-def get_pexels_video(query="football soccer world cup"):
+def get_pexels_video(query="football soccer"):
     headers = {"Authorization": PEXELS_API_KEY}
     url = f"https://api.pexels.com/videos/search?query={query}&per_page=5&orientation=portrait"
-    response = requests.get(url, headers=headers)
-    data = response.json()
-    
-    if data.get("videos"):
-        for video in data["videos"]:
-            for file in video["video_files"]:
-                if file.get("quality") in ["hd", "sd"] and file.get("width", 0) <= 1080:
-                    return file["link"]
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        if data.get("videos"):
+            for video in data["videos"]:
+                for file in video["video_files"]:
+                    if file.get("quality") in ["hd", "sd"] and file.get("width", 9999) <= 1080:
+                        return file["link"]
+    except:
+        pass
     return None
 
-def create_text_overlay(text, output_path, width=1080, height=1920):
-    img = Image.new('RGBA', (width, height), (0, 0, 0, 180))
+def create_text_image(home, away, date, script, output_path, width=1080, height=1920):
+    img = Image.new('RGB', (width, height), color=(10, 10, 30))
     draw = ImageDraw.Draw(img)
     
+    # Gradient background effect
+    for i in range(height):
+        r = int(10 + (i/height) * 20)
+        g = int(10 + (i/height) * 10)
+        b = int(30 + (i/height) * 40)
+        draw.line([(0, i), (width, i)], fill=(r, g, b))
+    
     try:
-        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 55)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
+        font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 65)
+        font_match = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 55)
+        font_body = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 38)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
     except:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+        font_title = font_match = font_body = font_small = ImageFont.load_default()
     
-    # Title
-    draw.text((width//2, 150), "🏆 WORLD CUP 2026", fill=(255, 215, 0), font=font_large, anchor="mm")
+    # Top banner
+    draw.rectangle([(0, 0), (width, 130)], fill=(200, 160, 0))
+    draw.text((width//2, 65), "🏆 WORLD CUP 2026", fill=(0, 0, 0), font=font_title, anchor="mm")
     
-    # Script text wrapped
-    wrapped = textwrap.fill(text, width=30)
+    # Match
+    draw.text((width//2, 250), home, fill=(255, 255, 255), font=font_match, anchor="mm")
+    draw.text((width//2, 330), "VS", fill=(200, 160, 0), font=font_title, anchor="mm")
+    draw.text((width//2, 420), away, fill=(255, 255, 255), font=font_match, anchor="mm")
+    
+    # Date
+    draw.text((width//2, 510), date, fill=(180, 180, 180), font=font_small, anchor="mm")
+    
+    # Divider
+    draw.rectangle([(80, 550), (width-80, 555)], fill=(200, 160, 0))
+    
+    # Script text
+    wrapped = textwrap.fill(script[:300], width=32)
     lines = wrapped.split('\n')
-    y = 400
-    for line in lines:
-        draw.text((width//2, y), line, fill=(255, 255, 255), font=font_small, anchor="mm")
-        y += 60
+    y = 600
+    for line in lines[:10]:
+        draw.text((width//2, y), line, fill=(255, 255, 255), font=font_body, anchor="mm")
+        y += 55
     
-    # Bottom hashtags
-    draw.text((width//2, height-150), "#WorldCup2026 #FIFA #Football", fill=(255, 215, 0), font=font_small, anchor="mm")
+    # Bottom
+    draw.rectangle([(0, height-120), (width, height)], fill=(200, 160, 0))
+    draw.text((width//2, height-60), "#WorldCup2026 #FIFA #Football", fill=(0, 0, 0), font=font_small, anchor="mm")
     
     img.save(output_path)
 
@@ -62,60 +89,68 @@ def create_video(script, home, away, date, output_path):
     with tempfile.TemporaryDirectory() as tmpdir:
         # 1. Generate voice
         audio_path = os.path.join(tmpdir, "voice.mp3")
-        asyncio.run(generate_voice(script, audio_path))
+        generate_voice_gtts(script, audio_path)
         
-        # 2. Get background video from Pexels
-        video_url = get_pexels_video(f"{home} {away} football soccer")
-        bg_path = os.path.join(tmpdir, "background.mp4")
+        # 2. Create background image
+        bg_image_path = os.path.join(tmpdir, "background.png")
+        create_text_image(home, away, date, script, bg_image_path)
+        
+        # 3. Try to get Pexels video
+        video_url = get_pexels_video(f"football soccer world cup")
+        bg_video_path = os.path.join(tmpdir, "bg_video.mp4")
+        has_video = False
         
         if video_url:
-            r = requests.get(video_url, stream=True)
-            with open(bg_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        
-        # 3. Create text overlay image
-        overlay_path = os.path.join(tmpdir, "overlay.png")
-        create_text_overlay(f"{home} vs {away}\n{date}\n\n{script[:200]}...", overlay_path)
+            try:
+                r = requests.get(video_url, stream=True, timeout=30)
+                with open(bg_video_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                has_video = True
+            except:
+                has_video = False
         
         # 4. Get audio duration
-        result = subprocess.run([
-            "ffprobe", "-v", "error", "-show_entries",
-            "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
-            audio_path
-        ], capture_output=True, text=True)
-        duration = float(result.stdout.strip()) if result.stdout.strip() else 45
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-show_entries",
+                "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+                audio_path
+            ], capture_output=True, text=True, timeout=10)
+            duration = float(result.stdout.strip())
+        except:
+            duration = 45
         
-        # 5. Combine with FFmpeg
-        if video_url and os.path.exists(bg_path):
+        # 5. Create video with FFmpeg
+        if has_video:
             cmd = [
                 "ffmpeg", "-y",
-                "-stream_loop", "-1", "-i", bg_path,
+                "-stream_loop", "-1", "-i", bg_video_path,
+                "-loop", "1", "-i", bg_image_path,
                 "-i", audio_path,
-                "-i", overlay_path,
                 "-filter_complex",
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[bg];"
-                "[bg][2:v]overlay=0:0[v]",
-                "-map", "[v]", "-map", "1:a",
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg];"
+                "[bg][1:v]overlay=0:0:alpha=0.7[v]",
+                "-map", "[v]", "-map", "2:a",
                 "-t", str(duration),
-                "-c:v", "libx264", "-preset", "fast",
+                "-c:v", "libx264", "-preset", "ultrafast",
                 "-c:a", "aac", "-shortest",
                 output_path
             ]
         else:
-            # Fallback: image + audio
             cmd = [
                 "ffmpeg", "-y",
-                "-loop", "1", "-i", overlay_path,
+                "-loop", "1", "-i", bg_image_path,
                 "-i", audio_path,
-                "-c:v", "libx264", "-preset", "fast",
+                "-c:v", "libx264", "-preset", "ultrafast",
                 "-c:a", "aac",
                 "-t", str(duration),
                 "-vf", "scale=1080:1920",
+                "-shortest",
                 output_path
             ]
         
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=120)
         return True
 
 def send_to_telegram(video_path, caption):
@@ -123,14 +158,17 @@ def send_to_telegram(video_path, caption):
     with open(video_path, 'rb') as f:
         response = requests.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
-            "caption": caption,
+            "caption": caption[:1024],
             "parse_mode": "Markdown"
-        }, files={"video": f})
+        }, files={"video": f}, timeout=60)
     return response.json()
 
 @app.route('/create-video', methods=['POST'])
 def create_video_endpoint():
     data = request.json
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
     script = data.get('script', '')
     home = data.get('home', 'Team A')
     away = data.get('away', 'Team B')
@@ -155,7 +193,7 @@ def create_video_endpoint():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "service": "video-factory"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
