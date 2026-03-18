@@ -4,8 +4,7 @@ import os
 import requests
 import tempfile
 import random
-import asyncio
-import edge_tts
+from gtts import gTTS
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 
@@ -61,14 +60,9 @@ def download_video_clip(url: str, path: str) -> bool:
         return False
 
 # ── Edge-TTS: تعليق صوتي عربي ──────────────────────────────────────────────
-async def _generate_arabic_voice(text: str, path: str):
-    voice = "ar-SA-HamedNeural"   # صوت عربي ذكوري احترافي
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(path)
-
 def generate_voice(script: str, output_path: str):
-    # نظّف النص ويكون عربياً
-    asyncio.run(_generate_arabic_voice(script, output_path))
+    tts = gTTS(text=script[:500], lang='ar', slow=False)
+    tts.save(output_path)
 
 # ── إنشاء overlay بسيط (شريط علوي + سفلي) ─────────────────────────────────
 def create_overlay_image(home: str, away: str, date: str, output_path: str):
