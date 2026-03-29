@@ -7,217 +7,138 @@ import random
 from gtts import gTTS
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
+import yt_dlp
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-PEXELS_API_KEY   = os.environ.get("PEXELS_API_KEY")
 
 WIDTH  = 540
 HEIGHT = 960
 
-# ── Pexels: جلب مقاطع كرة حقيقية ──────────────────────────────────────────
-FOOTBALL_QUERIES = [
-    "football stadium crowd",
-    "soccer match action",
-    "football players running",
-    "world cup stadium",
-    "soccer ball kick",
-    "football goal celebration",
+MUSIC_URLS = [
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
 ]
 
-def fetch_pexels_videos(query: str, count: int = 4) -> list[str]:
-    """يجلب روابط مقاطع فيديو من Pexels ويرجع قائمة URLs."""
-    headers = {"Authorization": PEXELS_API_KEY}
-    params  = {"query": query, "per_page": count, "orientation": "portrait", "size": "medium"}
-    try:
-        r = requests.get("https://api.pexels.com/videos/search", headers=headers, params=params, timeout=15)
-        r.raise_for_status()
-        videos = r.json().get("videos", [])
-        urls = []
-        for v in videos:
-            # نختار أصغر ملف HD لتوفير الذاكرة
-            files = sorted(v.get("video_files", []), key=lambda x: x.get("width", 9999))
-            for f in files:
-                if f.get("width", 0) <= 720 and f.get("link"):
-                    urls.append(f["link"])
-                    break
-        return urls
-    except Exception as e:
-        print(f"Pexels error: {e}")
-        return []
+HOOK_TEMPLATES = [
+    "Nobody believed him...",
+    "This moment changed everything.",
+    "They said it was impossible.",
+    "The whole world stopped.",
+    "History was made here.",
+    "No one saw this coming.",
+    "This is why he's the GOAT.",
+    "The greatest moment ever.",
+    "They will never forget this.",
+    "One touch. One legend.",
+]
 
-def download_video_clip(url: str, path: str) -> bool:
+# ── yt-dlp: تحميل فيديو من YouTube ─────────────────────────────────────────
+def download_youtube_video(youtube_url: str, output_path: str) -> bool:
+    ydl_opts = {
+        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]',
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4',
+        'noplaylist': True,
+    }
     try:
-        r = requests.get(url, timeout=30, stream=True)
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(32768):
-                f.write(chunk)
-        return os.path.getsize(path) > 10000
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
     except Exception as e:
-        print(f"Download error: {e}")
+        print(f"yt-dlp error: {e}")
         return False
 
-# ── Edge-TTS: تعليق صوتي عربي ──────────────────────────────────────────────
-def generate_voice(script: str, output_path: str):
-    tts = gTTS(text=script[:500], lang='ar', slow=False)
-    tts.save(output_path)
+# ── تحميل موسيقى خلفية ──────────────────────────────────────────────────────
+def download_music(output_path: str) -> bool:
+    url = random.choice(MUSIC_URLS)
+    try:
+        r = requests.get(url, timeout=30, stream=True)
+        with open(output_path, "wb") as f:
+            for chunk in r.iter_content(32768):
+                f.write(chunk)
+        return os.path.getsize(output_path) > 1000
+    except Exception as e:
+        print(f"Music download error: {e}")
+        return False
 
-# ── إنشاء overlay بسيط (شريط علوي + سفلي) ─────────────────────────────────
-def create_overlay_image(home: str, away: str, date: str, output_path: str):
+# ── Hook إنجليزي فوق الفيديو ────────────────────────────────────────────────
+def create_hook_overlay(hook_text: str, output_path: str):
     img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     try:
-        font_big   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
-        font_med   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        font_hook  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
     except:
-        font_big = font_med = font_small = ImageFont.load_default()
+        font_hook = font_small = ImageFont.load_default()
 
-    # شريط علوي
-    draw.rectangle([(0, 0), (WIDTH, 80)], fill=(200, 160, 0, 230))
-    draw.text((WIDTH // 2, 40), "🏆 WORLD CUP 2026", fill=(0, 0, 0, 255), font=font_big, anchor="mm")
+    # شريط Hook علوي - خلفية شبه شفافة
+    draw.rectangle([(0, 0), (WIDTH, 100)], fill=(0, 0, 0, 180))
 
-    # بطاقة المباراة في المنتصف
-    draw.rectangle([(20, HEIGHT // 2 - 90), (WIDTH - 20, HEIGHT // 2 + 90)], fill=(0, 0, 20, 200))
-    draw.rectangle([(20, HEIGHT // 2 - 90), (WIDTH - 20, HEIGHT // 2 + 90)], outline=(200, 160, 0, 255), width=2)
-    draw.text((WIDTH // 2, HEIGHT // 2 - 55), home,  fill=(255, 255, 255, 255), font=font_med, anchor="mm")
-    draw.text((WIDTH // 2, HEIGHT // 2),      "VS",  fill=(200, 160, 0, 255),   font=font_big, anchor="mm")
-    draw.text((WIDTH // 2, HEIGHT // 2 + 55), away,  fill=(255, 255, 255, 255), font=font_med, anchor="mm")
-    draw.text((WIDTH // 2, HEIGHT // 2 + 80), date,  fill=(180, 180, 180, 255), font=font_small, anchor="mm")
+    # نص Hook بالإنجليزية
+    wrapped = textwrap.fill(hook_text, width=22)
+    y = 20
+    for line in wrapped.split("\n"):
+        draw.text((WIDTH // 2, y), line,
+                  fill=(255, 215, 0, 255),
+                  font=font_hook,
+                  anchor="mm")
+        y += 45
 
-    # شريط سفلي
-    draw.rectangle([(0, HEIGHT - 60), (WIDTH, HEIGHT)], fill=(200, 160, 0, 230))
-    draw.text((WIDTH // 2, HEIGHT - 30), "#WorldCup2026  #FIFA  #Football",
-              fill=(0, 0, 0, 255), font=font_small, anchor="mm")
+    # شريط سفلي للهاشتاقات
+    draw.rectangle([(0, HEIGHT - 70), (WIDTH, HEIGHT)], fill=(0, 0, 0, 180))
+    draw.text((WIDTH // 2, HEIGHT - 35),
+              "#Football #GOAT #WC2026 #Soccer",
+              fill=(255, 255, 255, 200),
+              font=font_small,
+              anchor="mm")
 
     img.save(output_path)
 
-# ── تجميع الفيديو النهائي ──────────────────────────────────────────────────
-def build_final_video(clips: list[str], audio_path: str, overlay_path: str,
-                      output_path: str, target_duration: float = 50.0):
+# ── تجميع الفيديو النهائي ────────────────────────────────────────────────────
+def build_final_video(raw_video: str, music_path: str, overlay_path: str,
+                      output_path: str, start_time: float = 0, duration: float = 75.0):
     """
-    1. يدمج مقاطع Pexels معاً (loop إذا قصيرة)
-    2. يضيف overlay شفاف فوق الفيديو
-    3. يضيف التعليق الصوتي
+    - يقص الفيديو من start_time لمدة duration ثانية
+    - يحوله إلى 9:16
+    - يضيف Hook overlay
+    - يضيف موسيقى درامية بـ fade in/out
+    - بدون صوت أصلي (يتفادى حقوق الملكية)
     """
-    with tempfile.TemporaryDirectory() as tmp:
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start_time),
+        "-i", raw_video,
+        "-i", overlay_path,
+        "-i", music_path,
+        "-filter_complex",
+        (
+            f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={WIDTH}:{HEIGHT},setsar=1,setpts=PTS-STARTPTS[base];"
+            f"[base][1:v]overlay=0:0:format=auto[v];"
+            f"[2:a]afade=t=in:st=0:d=2,afade=t=out:st={duration-3}:d=3,"
+            f"volume=0.4[a]"
+        ),
+        "-map", "[v]",
+        "-map", "[a]",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "128k",
+        "-t", str(duration),
+        "-pix_fmt", "yuv420p",
+        "-threads", "2",
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg error: {result.stderr.decode()[-500:]}")
 
-        # ── الخطوة 1: اقتصاص وتوحيد كل مقطع إلى 9:16 ──
-        processed = []
-        for i, clip in enumerate(clips[:5]):   # أقصى 5 مقاطع لتوفير RAM
-            out = os.path.join(tmp, f"clip_{i}.mp4")
-            cmd = [
-                "ffmpeg", "-y", "-i", clip,
-                "-vf", (
-                    f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
-                    f"crop={WIDTH}:{HEIGHT},"
-                    f"setsar=1"
-                ),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",
-                "-an",                    # بدون صوت أصلي
-                "-t", "12",               # أقصى 12 ثانية لكل مقطع
-                "-threads", "1",
-                out
-            ]
-            result = subprocess.run(cmd, capture_output=True, timeout=120)
-            if result.returncode == 0:
-                processed.append(out)
-
-        if not processed:
-            raise RuntimeError("No clips processed")
-
-        # ── الخطوة 2: دمج المقاطع في ملف واحد ──
-        concat_list = os.path.join(tmp, "concat.txt")
-        # كرر المقاطع حتى نصل للمدة المطلوبة
-        repeated = []
-        total = 0
-        while total < target_duration:
-            for p in processed:
-                repeated.append(p)
-                total += 12
-                if total >= target_duration:
-                    break
-
-        with open(concat_list, "w") as f:
-            for p in repeated:
-                f.write(f"file '{p}'\n")
-
-        merged = os.path.join(tmp, "merged.mp4")
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_list,
-            "-c", "copy", "-t", str(target_duration),
-            merged
-        ], check=True, timeout=120)
-
-        # ── الخطوة 3: إضافة overlay + صوت ──
-        cmd_final = [
-            "ffmpeg", "-y",
-            "-i", merged,
-            "-i", overlay_path,
-            "-i", audio_path,
-            "-filter_complex", (
-                "[0:v][1:v]overlay=0:0:format=auto[v]"
-            ),
-            "-map", "[v]",
-            "-map", "2:a",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "33",
-            "-c:a", "aac", "-b:a", "96k",
-            "-t", str(target_duration),
-            "-pix_fmt", "yuv420p",
-            "-threads", "1",
-            "-shortest",
-            output_path
-        ]
-        subprocess.run(cmd_final, check=True, timeout=180)
-
-# ── فولباك: فيديو نصي إذا فشل Pexels ──────────────────────────────────────
-def build_fallback_video(script: str, home: str, away: str, date: str,
-                         audio_path: str, output_path: str):
-    with tempfile.TemporaryDirectory() as tmp:
-        bg = os.path.join(tmp, "bg.png")
-        img = Image.new("RGB", (WIDTH, HEIGHT), (10, 10, 30))
-        draw = ImageDraw.Draw(img)
-        try:
-            font_big   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
-            font_med   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
-            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        except:
-            font_big = font_med = font_small = ImageFont.load_default()
-
-        draw.rectangle([(0, 0), (WIDTH, 80)], fill=(200, 160, 0))
-        draw.text((WIDTH // 2, 40), "WORLD CUP 2026", fill=(0, 0, 0), font=font_big, anchor="mm")
-        draw.text((WIDTH // 2, 160), home, fill=(255, 255, 255), font=font_med, anchor="mm")
-        draw.text((WIDTH // 2, 210), "VS",  fill=(200, 160, 0), font=font_big, anchor="mm")
-        draw.text((WIDTH // 2, 260), away,  fill=(255, 255, 255), font=font_med, anchor="mm")
-        draw.text((WIDTH // 2, 300), date,  fill=(180, 180, 180), font=font_small, anchor="mm")
-
-        wrapped = textwrap.fill(script[:300], width=32)
-        y = 350
-        for line in wrapped.split("\n")[:10]:
-            draw.text((WIDTH // 2, y), line, fill=(220, 220, 220), font=font_small, anchor="mm")
-            y += 28
-
-        draw.rectangle([(0, HEIGHT - 60), (WIDTH, HEIGHT)], fill=(200, 160, 0))
-        draw.text((WIDTH // 2, HEIGHT - 30), "#WorldCup2026 #FIFA #Football",
-                  fill=(0, 0, 0), font=font_small, anchor="mm")
-        img.save(bg)
-
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-loop", "1", "-i", bg,
-            "-i", audio_path,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",
-            "-c:a", "aac", "-b:a", "64k",
-            "-t", "50", "-vf", f"scale={WIDTH}:{HEIGHT}",
-            "-pix_fmt", "yuv420p", "-threads", "1", "-shortest",
-            output_path
-        ], check=True, timeout=180)
-
-# ── إرسال لـ Telegram ──────────────────────────────────────────────────────
+# ── إرسال لـ Telegram ────────────────────────────────────────────────────────
 def send_to_telegram(video_path: str, caption: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
     with open(video_path, "rb") as f:
@@ -225,68 +146,79 @@ def send_to_telegram(video_path: str, caption: str):
             "chat_id": TELEGRAM_CHAT_ID,
             "caption": caption[:1024],
             "parse_mode": "Markdown"
-        }, files={"video": f}, timeout=90)
+        }, files={"video": f}, timeout=120)
     return r.json()
 
-# ── Endpoint رئيسي ─────────────────────────────────────────────────────────
-@app.route("/create-video", methods=["POST"])
-def create_video_endpoint():
+# ── Endpoint الجديد: YouTube → TikTok ───────────────────────────────────────
+@app.route("/create-football-video", methods=["POST"])
+def create_football_video():
     data = request.json
     if not data:
         return jsonify({"error": "No data"}), 400
 
-    script  = data.get("script", "")
-    home    = data.get("home", "Team A")
-    away    = data.get("away", "Team B")
-    date    = data.get("date", "")
-    caption = data.get("caption", "")
+    youtube_url = data.get("youtube_url", "")
+    hook        = data.get("hook", random.choice(HOOK_TEMPLATES))
+    caption     = data.get("caption", "⚽ Football moment 🔥\n\n#Football #Soccer #WC2026")
+    start_time  = float(data.get("start_time", 10))
+    duration    = float(data.get("duration", 75))
+    duration    = max(60.0, min(90.0, duration))
 
-    if not script:
-        return jsonify({"error": "No script"}), 400
+    if not youtube_url:
+        return jsonify({"error": "youtube_url required"}), 400
 
     output_path = tempfile.mktemp(suffix=".mp4")
 
     try:
         with tempfile.TemporaryDirectory() as tmp:
 
-            # 1. توليد الصوت العربي
-            audio_path = os.path.join(tmp, "voice.mp3")
-            generate_voice(script, audio_path)
+            # 1. تحميل الفيديو من YouTube
+            raw_video = os.path.join(tmp, "raw.mp4")
+            if not download_youtube_video(youtube_url, raw_video):
+                return jsonify({"error": "Failed to download YouTube video"}), 500
 
-            # 2. حساب مدة الصوت
-            try:
-                res = subprocess.run([
-                    "ffprobe", "-v", "error", "-show_entries",
-                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
-                    audio_path
-                ], capture_output=True, text=True, timeout=10)
-                duration = min(float(res.stdout.strip()), 60.0)
-            except:
-                duration = 50.0
+            # 2. تحميل موسيقى درامية
+            music_path = os.path.join(tmp, "music.mp3")
+            has_music = download_music(music_path)
 
-            # 3. جلب مقاطع Pexels
-            query = random.choice(FOOTBALL_QUERIES)
-            video_urls = fetch_pexels_videos(query, count=4)
+            # 3. إنشاء Hook overlay
+            overlay_path = os.path.join(tmp, "overlay.png")
+            create_hook_overlay(hook, overlay_path)
 
-            clip_paths = []
-            if video_urls and PEXELS_API_KEY:
-                for i, url in enumerate(video_urls[:4]):
-                    cp = os.path.join(tmp, f"raw_{i}.mp4")
-                    if download_video_clip(url, cp):
-                        clip_paths.append(cp)
-
-            if clip_paths:
-                # 4a. فيديو بلقطات حقيقية
-                overlay_path = os.path.join(tmp, "overlay.png")
-                create_overlay_image(home, away, date, overlay_path)
-                build_final_video(clip_paths, audio_path, overlay_path, output_path, duration)
+            # 4. تجميع الفيديو
+            if has_music:
+                build_final_video(raw_video, music_path, overlay_path,
+                                  output_path, start_time, duration)
             else:
-                # 4b. فولباك نصي
-                build_fallback_video(script, home, away, date, audio_path, output_path)
+                # بدون موسيقى إذا فشل التحميل
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(start_time),
+                    "-i", raw_video,
+                    "-i", overlay_path,
+                    "-filter_complex",
+                    (
+                        f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+                        f"crop={WIDTH}:{HEIGHT},setsar=1[base];"
+                        f"[base][1:v]overlay=0:0:format=auto[v]"
+                    ),
+                    "-map", "[v]",
+                    "-an",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                    "-t", str(duration),
+                    "-pix_fmt", "yuv420p",
+                    "-threads", "2",
+                    output_path
+                ]
+                subprocess.run(cmd, check=True, timeout=300)
 
         # 5. إرسال لـ Telegram
         result = send_to_telegram(output_path, caption)
-        return jsonify({"success": True, "mode": "pexels" if clip_paths else "fallback", "telegram": result})
+        return jsonify({
+            "success": True,
+            "hook": hook,
+            "duration": duration,
+            "telegram": result
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -294,9 +226,18 @@ def create_video_endpoint():
         if os.path.exists(output_path):
             os.unlink(output_path)
 
+# ── Endpoint القديم (نبقيه لعدم كسر n8n الحالي) ──────────────────────────────
+@app.route("/create-video", methods=["POST"])
+def create_video_endpoint():
+    return jsonify({"error": "Deprecated. Use /create-football-video"}), 410
+
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "2.0-pexels-arabic"})
+    return jsonify({
+        "status": "ok",
+        "version": "3.0-youtube-tiktok",
+        "endpoints": ["/create-football-video", "/health"]
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
